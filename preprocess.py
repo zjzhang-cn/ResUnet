@@ -31,7 +31,20 @@ def start_points(size, split_size, overlap=0):
 def crop_image_mask(image_dir, mask_dir, mask_path, X_points, Y_points, split_height=224, split_width=224):
     img_id = os.path.basename(mask_path).split(".")[0]
     mask = load_image(mask_path)
-    img = load_image(mask_path.replace("output", "input"))
+    # Find corresponding satellite image with same base name
+    sat_path = None
+    base_name = img_id
+    for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
+        possible_paths = glob.glob(os.path.join(os.path.dirname(mask_path).replace("map", "sat"), base_name + ".*"))
+        if possible_paths:
+            sat_path = possible_paths[0]
+            break
+    
+    if not sat_path or not os.path.exists(sat_path):
+        print(f"Warning: Could not find satellite image for {mask_path}")
+        return
+    
+    img = load_image(sat_path)
 
     count = 0
     num_skipped = 1
@@ -75,15 +88,15 @@ if __name__ == '__main__':
     Y_points = start_points(hp.IMAGE_SIZE, hp.CROP_SIZE, 0.14)
 
     ## Training data
-    train_img_dir = os.path.join(train_dir, "input")
-    train_mask_dir = os.path.join(train_dir, "output")
+    train_img_dir = os.path.join(train_dir, "sat")
+    train_mask_dir = os.path.join(train_dir, "map")
     train_img_crop_dir = os.path.join(hp.train, "input_crop")
     os.makedirs(train_img_crop_dir, exist_ok=True)
     train_mask_crop_dir = os.path.join(hp.train, "mask_crop")
     os.makedirs(train_mask_crop_dir, exist_ok=True)
 
-    img_files = glob.glob(os.path.join(train_img_dir, '**', '*.png'), recursive=True)
-    mask_files = glob.glob(os.path.join(train_mask_dir, '**', '*.png'), recursive=True)
+    img_files = glob.glob(os.path.join(train_img_dir, '**', '*.*'), recursive=True)
+    mask_files = glob.glob(os.path.join(train_mask_dir, '**', '*.*'), recursive=True)
     print("Length of image :", len(img_files))
     print("Length of mask :", len(mask_files))
     #assert len(img_files) == len(mask_files)
@@ -94,15 +107,15 @@ if __name__ == '__main__':
         crop_image_mask(train_img_crop_dir, train_mask_crop_dir, mask_path, X_points, Y_points)
 
     ### Validation data
-    valid_img_dir = os.path.join(valid_dir, "input")
-    valid_mask_dir = os.path.join(valid_dir, "output")
+    valid_img_dir = os.path.join(valid_dir, "sat")
+    valid_mask_dir = os.path.join(valid_dir, "map")
     valid_img_crop_dir = os.path.join(hp.valid, "input_crop")
     os.makedirs(valid_img_crop_dir, exist_ok=True)
     valid_mask_crop_dir = os.path.join(hp.valid, "mask_crop")
     os.makedirs(valid_mask_crop_dir, exist_ok=True)
 
-    img_files = glob.glob(os.path.join(valid_img_dir, '**', '*.png'), recursive=True)
-    mask_files = glob.glob(os.path.join(valid_mask_dir, '**', '*.png'), recursive=True)
+    img_files = glob.glob(os.path.join(valid_img_dir, '**', '*.*'), recursive=True)
+    mask_files = glob.glob(os.path.join(valid_mask_dir, '**', '*.*'), recursive=True)
     assert len(img_files) == len(mask_files)
 
 

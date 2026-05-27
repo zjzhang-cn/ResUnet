@@ -4,6 +4,7 @@ warnings.simplefilter("ignore", (UserWarning, FutureWarning))
 from utils.hparams import HParam
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from torchvision.utils import save_image
 from tqdm import tqdm
 from dataset import dataloader
 from utils import metrics
@@ -22,6 +23,8 @@ def main(hp, num_epochs, resume, name):
 
     os.makedirs("{}/{}".format(hp.log, name), exist_ok=True)
     writer = MyWriter("{}/{}".format(hp.log, name))
+    validation_image_dir = os.path.join(hp.log, name, "validation_images")
+    os.makedirs(validation_image_dir, exist_ok=True)
     # get model
 
     if hp.RESNET_PLUS_PLUS:
@@ -83,13 +86,14 @@ def main(hp, num_epochs, resume, name):
     for epoch in range(start_epoch, num_epochs):
         print("Epoch {}/{}".format(epoch, num_epochs - 1))
         print("-" * 10)
+        model.train()
 
         # step the learning rate scheduler
         lr_scheduler.step()
 
         # run training and validation
         # logging accuracy and loss
-        train_acc = metrics.MetricTracker()
+        train_dice = metrics.MetricTracker()
         train_loss = metrics.MetricTracker()
         # iterate over data
 
@@ -115,22 +119,27 @@ def main(hp, num_epochs, resume, name):
             loss.backward()
             optimizer.step()
 
-            train_acc.update(metrics.dice_coeff(outputs, labels), outputs.size(0))
+            train_dice.update(metrics.dice_coeff(outputs, labels), outputs.size(0))
             train_loss.update(loss.data.item(), outputs.size(0))
 
             # tensorboard logging
             if step % hp.logging_step == 0:
-                writer.log_training(train_loss.avg, train_acc.avg, step)
+                writer.log_training(train_loss.avg, train_dice.avg, step)
                 loader.set_description(
-                    "Training Loss: {:.4f} Acc: {:.4f}".format(
-                        train_loss.avg, train_acc.avg
+                    "Training Loss: {:.4f} Dice: {:.4f}".format(
+                        train_loss.avg, train_dice.avg
                     )
                 )
 
             # Validatiuon
             if step % hp.validation_interval == 0:
                 valid_metrics = validation(
-                    val_dataloader, model, criterion, writer, step
+                    val_dataloader,
+                    model,
+                    criterion,
+                    writer,
+                    step,
+                    validation_image_dir,
                 )
                 save_path = os.path.join(
                     checkpoint_dir, "%s_checkpoint_%04d.pt" % (name, step)
@@ -153,39 +162,48 @@ def main(hp, num_epochs, resume, name):
             step += 1
 
 
-def validation(valid_loader, model, criterion, logger, step):
+def validation(valid_loader, model, criterion, logger, step, image_save_dir):
 
     # logging accuracy and loss
-    valid_acc = metrics.MetricTracker()
+    valid_dice = metrics.MetricTracker()
     valid_loss = metrics.MetricTracker()
 
     # switch to evaluate mode
     model.eval()
 
     # Iterate over data.
-    for idx, data in enumerate(tqdm(valid_loader, desc="validation")):
+    with torch.no_grad():
+        for idx, data in enumerate(tqdm(valid_loader, desc="validation")):
 
-        # get the inputs and wrap in Variable
-        inputs = data["sat_img"].cuda()
-        labels = data["map_img"].cuda()
+            # get the inputs and wrap in Variable
+            inputs = data["sat_img"].cuda()
+            labels = data["map_img"].cuda()
 
-        # forward
-        # prob_map = model(inputs) # last activation was a sigmoid
-        # outputs = (prob_map > 0.3).float()
-        outputs = model(inputs)
-        # outputs = torch.nn.functional.sigmoid(outputs)
+            # forward
+            # prob_map = model(inputs) # last activation was a sigmoid
+            # outputs = (prob_map > 0.3).float()
+            outputs = model(inputs)
+            # outputs = torch.nn.functional.sigmoid(outputs)
 
-        loss = criterion(outputs, labels)
+            loss = criterion(outputs, labels)
 
-        valid_acc.update(metrics.dice_coeff(outputs, labels), outputs.size(0))
-        valid_loss.update(loss.data.item(), outputs.size(0))
-        if idx == 0:
-            logger.log_images(inputs.cpu(), labels.cpu(), outputs.cpu(), step)
-    logger.log_validation(valid_loss.avg, valid_acc.avg, step)
+            valid_dice.update(metrics.dice_coeff(outputs, labels), outputs.size(0))
+            valid_loss.update(loss.data.item(), outputs.size(0))
+            if idx == 0:
+                logger.log_images(inputs.cpu(), labels.cpu(), outputs.cpu(), step)
+                prediction = outputs[0].detach().cpu()
+                if prediction.min().item() < 0 or prediction.max().item() > 1:
+                    prediction = torch.sigmoid(prediction)
+                prediction_save_path = os.path.join(
+                    image_save_dir, "prediction_step_%06d.png" % step
+                )
+                save_image(prediction.clamp(0, 1), prediction_save_path)
+                print("Saved validation prediction image: {}".format(prediction_save_path))
+    logger.log_validation(valid_loss.avg, valid_dice.avg, step)
 
-    print("Validation Loss: {:.4f} Acc: {:.4f}".format(valid_loss.avg, valid_acc.avg))
+    print("Validation Loss: {:.4f} Dice: {:.4f}".format(valid_loss.avg, valid_dice.avg))
     model.train()
-    return {"valid_loss": valid_loss.avg, "valid_acc": valid_acc.avg}
+    return {"valid_loss": valid_loss.avg, "valid_dice": valid_dice.avg}
 
 
 if __name__ == "__main__":
